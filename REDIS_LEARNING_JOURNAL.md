@@ -52,6 +52,42 @@
 **Redis commands introduced:**
 
 *None yet - Phase 0 is orientation only.*
+### Phase 1 - Project Scaffolding
+
+**What we built:**
+
+- Docker Compose for PostgreSQL (port 5433) and Redis (port 6380)
+- Express backend with layered architecture: Routes -> Controllers -> Services
+- Prisma schema for User, Category, Product, Inventory, Order, OrderItem
+- ioredis client with lazy connect and graceful error logging
+- Zod-validated environment configuration
+- Centralized error handling middleware
+- Health endpoint reporting Postgres and Redis connectivity
+- React frontend with TanStack Query polling the health endpoint
+
+**Key architectural decisions:**
+
+| Decision | Rationale |
+|---|---|
+| TypeScript on backend | Type safety for services and API contracts; matches modern Node.js practice |
+| ioredis with lazyConnect | App starts even if Redis is momentarily unavailable; aligns with graceful degradation |
+| Health returns "degraded" not 503 when Redis alone is down | Postgres is hard dependency for durable data; Redis outage is survivable in Phase 1 |
+| Non-default Docker ports (5433, 6380) | Avoids conflicts with other local Postgres/Redis instances |
+| Prisma seed with sample products | Gives realistic data ready for cache-aside benchmarks in Phase 2 |
+
+**Concepts introduced:**
+
+- Layered backend architecture as foundation for Redis integration points
+- Environment validation at startup (fail fast on misconfiguration)
+- Dependency health checks as operational baseline before adding cache logic
+- Singleton clients for Prisma and Redis (connection reuse in dev)
+
+**Redis commands introduced:**
+
+| Command | Purpose | Phase Introduced |
+|---|---|---|
+| `PING` | Verify Redis connectivity | 1 |
+
 
 ---
 
@@ -111,6 +147,30 @@ E-Commerce hits nearly every Redis use case in production:
 | One product goes viral | Hot key mitigation |
 | Multiple API servers, stale local cache | Pub/Sub invalidation |
 
+
+### Phase 1
+
+#### Why Scaffold Before Caching?
+
+Redis patterns need a realistic application context. Phase 1 establishes:
+
+1. **Where Redis plugs in** - Services layer, via `src/redis/` helpers
+2. **What Postgres owns** - Durable e-commerce entities in Prisma schema
+3. **How we verify things work** - Health endpoint before cache hit/miss metrics
+4. **Graceful degradation hooks** - Redis client logs errors but does not crash the app
+
+#### Backend Layer Responsibilities
+
+```
+Request -> Routes -> Controllers -> Services -> Prisma / Redis
+```
+
+- **Routes** - URL mapping only
+- **Controllers** - HTTP request/response handling
+- **Services** - Business logic; where Redis cache-aside will live (Phase 2+)
+- **Prisma** - Source of truth for durable data
+- **Redis** - Connected but unused for caching until Phase 2
+
 #### The Teaching Loop (Every Phase)
 
 1. Explain the problem
@@ -132,7 +192,7 @@ E-Commerce hits nearly every Redis use case in production:
 
 | Command | Purpose | Phase Introduced |
 |---|---|---|
-| *(none yet)* | - | - |
+| `PING` | Verify Redis server is reachable | 1 |
 
 ---
 
@@ -145,7 +205,12 @@ E-Commerce hits nearly every Redis use case in production:
 3. **TTL is not a substitute for invalidation** - it's a safety net. Relying only on TTL means accepting stale data for the TTL duration.
 4. **Operational awareness matters.** Know your eviction policy, memory limits, and connection pool sizes before production.
 5. **Hot keys can negate Redis benefits.** A single key receiving millions of requests per second will bottleneck even Redis.
-6. **Do not conflate derived data with ephemeral state.** Sessions are not cache entries. Treating them the same leads to wrong fallback logic and wrong interview answers.
+6. **Do not conflate derived data with ephemeral state.**
+
+1. **Validate environment at startup** - Misconfigured DATABASE_URL or REDIS_URL should fail immediately, not at first request.
+2. **Health checks should reflect dependency criticality** - Postgres down = 503; Redis down = degraded (200) in this scaffold.
+3. **Use non-default ports in Docker Compose when developing locally** - Port conflicts with existing Postgres/Redis are common.
+4. **Keep Redis client connection lazy** - Avoid blocking app startup on Redis availability. Sessions are not cache entries. Treating them the same leads to wrong fallback logic and wrong interview answers.
 
 ---
 
@@ -184,6 +249,24 @@ E-Commerce hits nearly every Redis use case in production:
    - *Hint: Sessions are not copies of Postgres rows. Losing them means re-login, not a DB fallback read. Different degradation logic.*
 
 11. **PostgreSQL is the source of truth for what kinds of data? What does Redis legitimately own?**
+### Phase 1 - Scaffolding / Infrastructure
+
+1. **Why separate Routes, Controllers, and Services? Where will Redis logic go?**
+   - *Hint: Separation of concerns. Redis orchestration belongs in Services (or thin redis/ modules), not in route handlers.*
+
+2. **Why validate environment variables with Zod at startup?**
+   - *Hint: Fail fast. Better to crash on boot with a clear message than serve 500s on every request.*
+
+3. **Why use lazyConnect for ioredis?**
+   - *Hint: App can start and serve Postgres-backed responses even if Redis is temporarily down.*
+
+4. **What should a health check report in a Redis-backed application?**
+   - *Hint: Per-dependency status. Distinguish hard dependencies (Postgres) from optimization layers (Redis).*
+
+5. **Why is Docker Compose sufficient for this learning project?**
+   - *Hint: Focus budget on Redis patterns, not Kubernetes. Two containers cover source of truth + cache.*
+
+
    - *Hint: Postgres owns durable business data. Redis owns derived copies (rebuildable) and ephemeral operational state (temporary by design).*
 
 ---
@@ -245,13 +328,32 @@ Read Request
 - [ ] What happens if Redis is down? (Different answer for derived vs ephemeral)
 - [ ] How will I measure the improvement?
 
+
+### Phase 1 - Quick Revision
+
+**Three sentences to remember:**
+
+1. Scaffold establishes *where* Redis plugs in (Services layer), not *how* to cache yet.
+2. Postgres health = hard dependency; Redis health = soft dependency (degraded, not dead).
+3. Environment validation and health checks are prerequisites for meaningful cache benchmarks.
+
+**Commands introduced:** `PING`
+
+**Run the stack:**
+```
+docker compose up -d
+cd backend && npm run dev
+cd frontend && npm run dev
+```
+
+
 ---
 
 ## Roadmap At-a-Glance
 
 ```
 Phase 0  [==========] Orientation
-Phase 1  [          ] Scaffolding
+Phase 1  [==========] Scaffolding
 Phase 2  [          ] Cache-Aside
 Phase 3  [          ] TTL & Invalidation
 Phase 4  [          ] Sessions
@@ -274,4 +376,4 @@ Phase 19 [          ] System Design Review
 
 ---
 
-*Last updated: Phase 0 - Orientation (clarified derived vs ephemeral Redis data)*
+*Last updated: Phase 1 - Project Scaffolding*

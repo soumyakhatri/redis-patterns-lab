@@ -188,14 +188,32 @@ No unit tests. Verification relies on:
 ```
 redis-patterns-lab/
 ├── backend/
+│   ├── prisma/
+│   │   ├── schema.prisma       # User, Product, Category, Order, Inventory
+│   │   ├── seed.ts
+│   │   └── migrations/
+│   └── src/
+│       ├── config/env.ts       # Zod-validated environment
+│       ├── controllers/
+│       ├── lib/prisma.ts
+│       ├── middleware/         # errorHandler, validate
+│       ├── redis/client.ts     # ioredis singleton + ping helper
+│       ├── routes/
+│       ├── services/
+│       ├── app.ts
+│       └── index.ts
 ├── frontend/
-├── PROJECT_CONTEXT.md          <- this file
+│   └── src/
+│       ├── api/client.ts       # Axios + TanStack Query health fetch
+│       ├── components/
+│       └── pages/
+├── docker-compose.yml          # Postgres (5433) + Redis (6380)
+├── PROJECT_CONTEXT.md
 ├── REDIS_LEARNING_JOURNAL.md
-├── docker-compose.yml
 └── README.md
 ```
 
-*Folders `backend/`, `frontend/`, and `docker-compose.yml` will be created in Phase 1.*
+**Local ports:** Postgres `5433`, Redis `6380` (non-default to avoid conflicts with other local services).
 
 ---
 
@@ -204,7 +222,7 @@ redis-patterns-lab/
 | Phase | Topic | Status |
 |---|---|---|
 | 0 | Orientation | Complete |
-| 1 | Project Scaffolding | Not started |
+| 1 | Project Scaffolding | Complete |
 | 2 | Cache-Aside Pattern | Not started |
 | 3 | TTL and Cache Invalidation | Not started |
 | 4 | Session Storage | Not started |
@@ -256,7 +274,7 @@ redis-patterns-lab/
 
 ---
 
-## E-Commerce Domain Model (Planned)
+## E-Commerce Domain Model
 
 A minimal but realistic domain to support Redis patterns:
 
@@ -295,6 +313,25 @@ Authentication remains **minimal** - enough to demonstrate sessions, not a full 
 
 **No application code written.**
 
+### Phase 1 - Project Scaffolding (Complete)
+
+**Completed:** Full-stack scaffold wired and verified. Docker Compose runs PostgreSQL and Redis. Express API with Routes -> Controllers -> Services architecture. Prisma schema for e-commerce domain. ioredis client connected (no caching patterns yet). React frontend with health dashboard.
+
+**Deliverables:**
+- `docker-compose.yml` - Postgres 16 + Redis 7
+- `backend/` - Express 5, TypeScript, Prisma, Zod, ioredis, health endpoint
+- `frontend/` - React 19, Vite, React Router, TanStack Query, Axios
+- Prisma migration + seed (2 categories, 3 sample products)
+- `GET /api/health` - reports postgres + redis connectivity
+
+**Redis usage in Phase 1:** Connection only (`PING` for health check). No cache keys introduced.
+
+**Verification:**
+- `docker compose up -d`
+- `cd backend && npm install && npx prisma migrate dev && npm run db:seed && npm run dev`
+- `cd frontend && npm install && npm run dev`
+- Health check: `http://localhost:3001/api/health` returns `{ status: "ok", postgres: "connected", redis: "connected" }`
+
 ---
 
-*Last updated: Phase 0 - Orientation (clarified derived vs ephemeral Redis data)*
+*Last updated: Phase 1 - Project Scaffolding*
