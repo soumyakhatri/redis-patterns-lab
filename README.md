@@ -29,10 +29,12 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
+Product catalog (cache-aside): [http://localhost:3001/api/products](http://localhost:3001/api/products)
+
 Health check: [http://localhost:3001/api/health](http://localhost:3001/api/health)
 
 ## Status
 
-**Phase 1 - Project Scaffolding** Complete
+**Phase 2 - Cache-Aside Pattern** Complete
 
-Next: **Phase 2 - Cache-Aside Pattern** (awaiting explicit go-ahead)
+Next: **Phase 3 - TTL and Cache Invalidation** (awaiting explicit go-ahead)

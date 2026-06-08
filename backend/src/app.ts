@@ -18,8 +18,12 @@ export function createApp() {
   app.get("/", (_req, res) => {
     res.json({
       name: "Redis Patterns Lab API",
-      phase: 1,
-      docs: "/api/health",
+      phase: 2,
+      docs: {
+        health: "/api/health",
+        products: "/api/products",
+        categories: "/api/categories",
+      },
     });
   });
 

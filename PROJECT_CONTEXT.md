@@ -223,7 +223,7 @@ redis-patterns-lab/
 |---|---|---|
 | 0 | Orientation | Complete |
 | 1 | Project Scaffolding | Complete |
-| 2 | Cache-Aside Pattern | Not started |
+| 2 | Cache-Aside Pattern | Complete |
 | 3 | TTL and Cache Invalidation | Not started |
 | 4 | Session Storage | Not started |
 | 5 | Rate Limiting | Not started |
@@ -252,7 +252,10 @@ redis-patterns-lab/
 
 | Key Pattern | Type | Purpose | Phase | TTL |
 |---|---|---|---|---|
-| *(none yet)* | - | - | - | - |
+| `product:{id}` | string (JSON) | Product detail cache | 2 | 300s |
+| `products:all` | string (JSON) | All products list | 2 | 300s |
+| `category:{slug}` | string (JSON) | Category with products | 2 | 300s |
+| `categories:all` | string (JSON) | All categories list | 2 | 300s |
 
 ---
 
@@ -260,7 +263,7 @@ redis-patterns-lab/
 
 | Pattern | Phase | Location | Notes |
 |---|---|---|---|
-| *(none yet)* | - | - | - |
+| Cache-aside (derived reads) | 2 | `src/redis/cacheAside.ts`, product/category services | GET/SET with graceful bypass |
 
 ---
 
@@ -270,7 +273,7 @@ redis-patterns-lab/
 
 | Phase | Endpoint | Before (req/s / avg / p95) | After (req/s / avg / p95) | PG Query Reduction |
 |---|---|---|---|---|
-| *(none yet)* | - | - | - | - |
+| 2 | `GET /api/products` | ~898 req/s / ~55 ms / ~96 ms (Redis down) | ~4,373 req/s / ~11 ms / ~25 ms (cache warm) | List endpoint served from Redis after first miss |
 
 ---
 
@@ -334,4 +337,25 @@ Authentication remains **minimal** - enough to demonstrate sessions, not a full 
 
 ---
 
-*Last updated: Phase 1 - Project Scaffolding*
+### Phase 2 - Cache-Aside Pattern (Complete)
+
+**Completed:** Cache-aside implemented for product and category read endpoints. Generic `cacheAside` helper in `src/redis/cacheAside.ts` with graceful degradation. `X-Cache` response header exposes hit/miss/bypass for verification. Frontend catalog shows cache status per request.
+
+**Deliverables:**
+- `src/redis/keys.ts` - derived-data key patterns
+- `src/redis/cacheAside.ts` - reusable cache-aside read helper
+- `GET /api/products`, `GET /api/products/:id` - product cache-aside
+- `GET /api/categories`, `GET /api/categories/:slug` - category cache-aside
+- Frontend product catalog + detail pages with `X-Cache` badges
+- Benchmark: ~4.9x throughput improvement (898 → 4,373 req/s) on warm cache vs Redis bypass
+
+**Redis usage in Phase 2:** `GET`, `SET EX` for derived product/category JSON. TTL 300s (basics only; invalidation in Phase 3).
+
+**Verification:**
+- First request: `X-Cache: miss`; second request: `X-Cache: hit`
+- `docker exec redis-patterns-redis redis-cli KEYS "*"` shows populated keys
+- `npx autocannon -c 50 -d 10 http://localhost:3001/api/products` (compare with Redis stopped vs warm)
+
+---
+
+*Last updated: Phase 2 - Cache-Aside Pattern*

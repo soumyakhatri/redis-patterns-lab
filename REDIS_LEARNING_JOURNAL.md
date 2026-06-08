@@ -87,6 +87,44 @@
 | Command | Purpose | Phase Introduced |
 |---|---|---|
 | `PING` | Verify Redis connectivity | 1 |
+### Phase 2 - Cache-Aside Pattern
+
+**What we built:**
+
+- Generic `cacheAside()` helper: Redis GET → on miss, load from Postgres → Redis SET EX
+- Product endpoints: list all products, get product by id
+- Category endpoints: list categories, get category by slug (with products)
+- `X-Cache` header on every cached response: `hit`, `miss`, or `bypass`
+- Frontend catalog and product detail pages surface cache status
+- 300-second TTL on cache keys (TTL basics; invalidation deferred to Phase 3)
+
+**Key architectural decisions:**
+
+| Decision | Rationale |
+|---|---|
+| Cache-aside in Services layer | Business logic owns orchestration; Redis helpers stay thin |
+| Graceful bypass on Redis failure | App continues via Postgres; logs warning on SET failures |
+| JSON string values in Redis | Simple serialization for Prisma DTOs; Decimal stored as string |
+| `X-Cache` header for observability | Makes hit/miss/bypass visible without redis-cli during development |
+| No negative caching yet | 404s not cached until Phase 8 (cache penetration) |
+| TTL without write invalidation | Phase 2 teaches read path; Phase 3 adds invalidation on updates |
+
+**Concepts introduced:**
+
+- Cache-aside (lazy loading) read path
+- Cache hit vs cache miss vs bypass semantics
+- Derived data classification in practice (products/categories = reconstructable)
+- TTL as a safety net (not a substitute for invalidation)
+- Measuring before/after with autocannon
+
+**Redis commands introduced:**
+
+| Command | Purpose | Phase Introduced |
+|---|---|---|
+| `GET` | Read cached JSON by key | 2 |
+| `SET key value EX seconds` | Populate cache with TTL | 2 |
+| `KEYS pattern` | Inspect cache keys during verification | 2 |
+| `FLUSHDB` | Clear cache for cold-start benchmarks | 2 |
 
 
 ---
@@ -127,6 +165,48 @@ Redis is not just a cache. In this project, data in Redis falls into two categor
 |      data (users, products, orders, inventory)            |
 +----------------------------------------------------------+
 ```
+
+### Phase 2
+
+#### Cache-Aside (Lazy Loading)
+
+The application — not Redis — owns the cache. On a read:
+
+1. Check Redis for the key
+2. **Hit:** deserialize and return (`X-Cache: hit`)
+3. **Miss:** query PostgreSQL, serialize result, write to Redis, return (`X-Cache: miss`)
+4. **Redis unavailable:** skip steps 1 and 3, query PostgreSQL only (`X-Cache: bypass`)
+
+```
+Read Request
+     |
+     v
++---------+   hit    +----------+
+|  Redis  |-------->| Response |
++----+----+
+     | miss / down
+     v
++------------+  populate (if Redis up)  +---------+
+| PostgreSQL |------------------------>|  Redis  |
++------------+                         +---------+
+```
+
+**Why cache-aside over write-through for reads?** Writes always go to Postgres (source of truth). Cache is populated on demand — only hot data consumes Redis memory. Simpler than synchronizing every write to Redis.
+
+**Tradeoffs:**
+- First reader after expiry pays full DB cost (thundering herd — Phase 9)
+- Stale data possible until TTL expires (invalidation — Phase 3)
+- Application must implement fallback logic (not built into Redis)
+
+#### Hit / Miss / Bypass
+
+| Result | Meaning | Postgres queried? |
+|---|---|---|
+| hit | Key found in Redis | No |
+| miss | Key absent; loaded from Postgres and cached | Yes |
+| bypass | Redis unavailable; served from Postgres only | Yes |
+
+Bypass is graceful degradation in action: Redis failure increases latency and DB load, but the app stays up.
 
 **Key distinction:** Losing derived data is a performance problem. Losing ephemeral state is an operational inconvenience - not a data integrity problem.
 
@@ -193,6 +273,10 @@ Request -> Routes -> Controllers -> Services -> Prisma / Redis
 | Command | Purpose | Phase Introduced |
 |---|---|---|
 | `PING` | Verify Redis server is reachable | 1 |
+| `GET` | Read cached value | 2 |
+| `SET EX` | Write value with TTL | 2 |
+| `KEYS` | List keys (dev/debug only) | 2 |
+| `FLUSHDB` | Clear current database | 2 |
 
 ---
 
@@ -206,6 +290,14 @@ Request -> Routes -> Controllers -> Services -> Prisma / Redis
 4. **Operational awareness matters.** Know your eviction policy, memory limits, and connection pool sizes before production.
 5. **Hot keys can negate Redis benefits.** A single key receiving millions of requests per second will bottleneck even Redis.
 6. **Do not conflate derived data with ephemeral state.**
+
+### Phase 2
+
+1. **Implement bypass before optimizing hits.** If Redis goes down and every request errors, you have a hard dependency — not an optimization layer.
+2. **Log SET failures, don't fail the request.** A cache write failure means the next reader hits Postgres again — acceptable.
+3. **Expose cache status during development.** `X-Cache` headers (or metrics) make hit rates visible without redis-cli.
+4. **Benchmark warm vs cold separately.** First request after flush is always a miss; sustained load tests show cache benefit.
+5. **TTL prevents unbounded growth but not staleness.** Phase 3 adds explicit invalidation on writes.
 
 1. **Validate environment at startup** - Misconfigured DATABASE_URL or REDIS_URL should fail immediately, not at first request.
 2. **Health checks should reflect dependency criticality** - Postgres down = 503; Redis down = degraded (200) in this scaffold.
@@ -247,6 +339,23 @@ Request -> Routes -> Controllers -> Services -> Prisma / Redis
 
 10. **Why should sessions NOT be treated as cache entries?**
    - *Hint: Sessions are not copies of Postgres rows. Losing them means re-login, not a DB fallback read. Different degradation logic.*
+
+### Phase 2 - Cache-Aside
+
+1. **Walk through a cache-aside read for GET /api/products/:id.**
+   - *Hint: Redis GET → miss → Prisma query → Redis SET EX → return. Mention X-Cache header.*
+
+2. **What happens when Redis is down mid-request in cache-aside?**
+   - *Hint: Bypass path. Every request hits Postgres. Log warnings on failed SET. App stays up; latency and DB load increase.*
+
+3. **Why use SET EX instead of SET alone?**
+   - *Hint: TTL prevents unbounded memory growth. 300s is a safety net; explicit invalidation comes on writes (Phase 3).*
+
+4. **Why not cache 404 responses in Phase 2?**
+   - *Hint: Negative caching is a separate concern (Phase 8). Blindly caching nulls can hide new data or poison cache.*
+
+5. **How did we verify Redis improved performance?**
+   - *Hint: autocannon with Redis warm (~4,373 req/s) vs Redis stopped (~898 req/s). Same endpoint, same hardware.*
 
 11. **PostgreSQL is the source of truth for what kinds of data? What does Redis legitimately own?**
 ### Phase 1 - Scaffolding / Infrastructure
@@ -339,6 +448,23 @@ Read Request
 
 **Commands introduced:** `PING`
 
+### Phase 2 - Quick Revision
+
+**Three sentences to remember:**
+
+1. Cache-aside = app checks Redis first, loads Postgres on miss, populates cache on the way out.
+2. hit / miss / bypass describe how the response was resolved — bypass means Redis was skipped entirely.
+3. Derived product data is reconstructable; losing Redis keys means slower reads, not lost business data.
+
+**Commands introduced:** `GET`, `SET EX`, `KEYS`, `FLUSHDB`
+
+**Verify cache-aside:**
+```
+curl -D - http://localhost:3001/api/products -o NUL   # miss, then hit
+docker exec redis-patterns-redis redis-cli KEYS "*"
+npx autocannon -c 50 -d 10 http://localhost:3001/api/products
+```
+
 **Run the stack:**
 ```
 docker compose up -d
@@ -354,7 +480,7 @@ cd frontend && npm run dev
 ```
 Phase 0  [==========] Orientation
 Phase 1  [==========] Scaffolding
-Phase 2  [          ] Cache-Aside
+Phase 2  [==========] Cache-Aside
 Phase 3  [          ] TTL & Invalidation
 Phase 4  [          ] Sessions
 Phase 5  [          ] Rate Limiting
@@ -376,4 +502,4 @@ Phase 19 [          ] System Design Review
 
 ---
 
-*Last updated: Phase 1 - Project Scaffolding*
+*Last updated: Phase 2 - Cache-Aside Pattern*
