@@ -35,6 +35,9 @@ Health check: [http://localhost:3001/api/health](http://localhost:3001/api/healt
 
 ## Status
 
-**Phase 2 - Cache-Aside Pattern** Complete
+**Phase 2 - Cache-Aside Pattern** — implementation and hands-on verification complete
+
+- Architecture review, concept Q&A, and live `curl.exe` + `redis-cli` trace documented in [REDIS_LEARNING_JOURNAL.md](./REDIS_LEARNING_JOURNAL.md)
+- Optional before Phase 3: `autocannon` warm vs bypass benchmark
 
 Next: **Phase 3 - TTL and Cache Invalidation** (awaiting explicit go-ahead)

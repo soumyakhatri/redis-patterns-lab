@@ -125,7 +125,14 @@
 | `SET key value EX seconds` | Populate cache with TTL | 2 |
 | `KEYS pattern` | Inspect cache keys during verification | 2 |
 | `FLUSHDB` | Clear cache for cold-start benchmarks | 2 |
+| `TTL key` | Confirm expiry countdown on cached keys | 2 |
 
+**Learning verification (mentor sessions):**
+
+- Deep architecture review: every Phase 2 file, request flow for `GET /api/products/:id`, Redis check/populate points
+- Concept Q&A with corrections (see **Learner Corrections** under Concepts Learned)
+- Hands-on trace with `curl.exe` + `redis-cli` (see **Hands-On Trace Log**)
+- **Optional remaining:** autocannon warm vs bypass benchmark
 
 ---
 
@@ -209,6 +216,54 @@ Read Request
 Bypass is graceful degradation in action: Redis failure increases latency and DB load, but the app stays up.
 
 **Key distinction:** Losing derived data is a performance problem. Losing ephemeral state is an operational inconvenience - not a data integrity problem.
+
+#### Learner Corrections (Phase 2 Q&A)
+
+Corrections from verification questions — worth remembering:
+
+| Topic | Initial intuition | Correct understanding |
+|---|---|---|
+| TTL purpose | "Prevents stale data" | TTL **limits how long** stale data can live; it is a safety net, not proactive freshness. Phase 3 invalidation actively prevents stale reads after writes. |
+| 404 responses | `X-Cache: miss` | Loader throws `AppError(404)` at `await loader()` — execution never reaches `SET`. Response is `404` with **no `X-Cache` header**. |
+| List vs detail keys | Same cache | `products:all` and `product:{id}` are **independent** entries. Caching the list does not warm the detail key. |
+| `miss` vs `bypass` | Both mean "get from DB" | **miss** = Redis up, key absent, result cached. **bypass** = Redis down/skipped, no `GET` or `SET`. |
+
+#### Hands-On Trace Log
+
+Verified live against local stack (June 2026):
+
+```powershell
+# Reset cache
+docker exec redis-patterns-redis redis-cli FLUSHDB
+
+# List: miss → hit
+curl.exe -s -D - http://localhost:3001/api/products -o NUL   # X-Cache: miss
+curl.exe -s -D - http://localhost:3001/api/products -o NUL   # X-Cache: hit
+
+# Inspect
+docker exec redis-patterns-redis redis-cli KEYS "*"
+docker exec redis-patterns-redis redis-cli TTL "products:all"   # ~283 (from 300)
+
+# Detail (separate key — miss even when list is warm)
+curl.exe -s -D - http://localhost:3001/api/products/2f30d18c-5554-4731-bb2c-d4399564ceb3 -o NUL  # miss
+curl.exe -s -D - http://localhost:3001/api/products/2f30d18c-5554-4731-bb2c-d4399564ceb3 -o NUL  # hit
+
+# Error paths
+curl.exe -s -D - http://localhost:3001/api/products/not-a-uuid -o NUL          # 400, no X-Cache
+curl.exe -s -D - http://localhost:3001/api/products/00000000-0000-0000-0000-000000000000 -o NUL  # 404, no X-Cache
+
+# Bypass (Redis stopped)
+docker stop redis-patterns-redis
+curl.exe -s -m 10 -D - http://localhost:3001/api/products/2f30d18c-5554-4731-bb2c-d4399564ceb3 -o NUL  # X-Cache: bypass
+docker start redis-patterns-redis
+```
+
+**Commands per request (product detail, Redis up):**
+
+| Request | Redis commands | Postgres |
+|---|---|---|
+| First (miss) | `PING`, `GET product:{id}`, `SET product:{id} EX 300` | Yes |
+| Second (hit) | `PING`, `GET product:{id}` | No |
 
 #### Why Learn Redis Through E-Commerce?
 
@@ -294,10 +349,14 @@ Request -> Routes -> Controllers -> Services -> Prisma / Redis
 ### Phase 2
 
 1. **Implement bypass before optimizing hits.** If Redis goes down and every request errors, you have a hard dependency — not an optimization layer.
-2. **Log SET failures, don't fail the request.** A cache write failure means the next reader hits Postgres again — acceptable.
+2. **Log SET failures, don't fail the request.** A cache write failure means the next reader hits Postgres again — acceptable. Client still gets data; `X-Cache: miss`.
 3. **Expose cache status during development.** `X-Cache` headers (or metrics) make hit rates visible without redis-cli.
 4. **Benchmark warm vs cold separately.** First request after flush is always a miss; sustained load tests show cache benefit.
-5. **TTL prevents unbounded growth but not staleness.** Phase 3 adds explicit invalidation on writes.
+5. **TTL limits staleness duration; it does not prevent staleness.** Phase 3 adds explicit invalidation on writes.
+6. **Each cache key is independent.** `products:all` and `product:{id}` can hold different versions of the same product until TTL or invalidation.
+7. **Do not cache error responses by accident.** 404s throw before `SET`; only successful loader results populate Redis.
+
+### Phase 1
 
 1. **Validate environment at startup** - Misconfigured DATABASE_URL or REDIS_URL should fail immediately, not at first request.
 2. **Health checks should reflect dependency criticality** - Postgres down = 503; Redis down = degraded (200) in this scaffold.
@@ -450,18 +509,25 @@ Read Request
 
 ### Phase 2 - Quick Revision
 
-**Three sentences to remember:**
+**Four sentences to remember:**
 
 1. Cache-aside = app checks Redis first, loads Postgres on miss, populates cache on the way out.
 2. hit / miss / bypass describe how the response was resolved — bypass means Redis was skipped entirely.
 3. Derived product data is reconstructable; losing Redis keys means slower reads, not lost business data.
+4. 404 and validation errors never set `X-Cache` — the controller does not finish on thrown errors.
 
-**Commands introduced:** `GET`, `SET EX`, `KEYS`, `FLUSHDB`
+**Commands introduced:** `GET`, `SET EX`, `KEYS`, `FLUSHDB`, `TTL`
 
-**Verify cache-aside:**
-```
-curl -D - http://localhost:3001/api/products -o NUL   # miss, then hit
+**Verify cache-aside (hands-on trace — completed):**
+```powershell
+docker exec redis-patterns-redis redis-cli FLUSHDB
+curl.exe -s -D - http://localhost:3001/api/products -o NUL   # miss, then hit
 docker exec redis-patterns-redis redis-cli KEYS "*"
+docker exec redis-patterns-redis redis-cli TTL "products:all"
+```
+
+**Optional benchmark (not yet run in review):**
+```
 npx autocannon -c 50 -d 10 http://localhost:3001/api/products
 ```
 
@@ -471,6 +537,8 @@ docker compose up -d
 cd backend && npm run dev
 cd frontend && npm run dev
 ```
+
+**Learning status:** Architecture + hands-on trace complete. Ready for Phase 3 when explicitly requested.
 
 
 ---
@@ -502,4 +570,4 @@ Phase 19 [          ] System Design Review
 
 ---
 
-*Last updated: Phase 2 - Cache-Aside Pattern*
+*Last updated: Phase 2 - Cache-Aside Pattern (learning verification + hands-on trace)*

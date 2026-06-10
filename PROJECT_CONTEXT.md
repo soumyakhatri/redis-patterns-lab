@@ -351,11 +351,37 @@ Authentication remains **minimal** - enough to demonstrate sessions, not a full 
 
 **Redis usage in Phase 2:** `GET`, `SET EX` for derived product/category JSON. TTL 300s (basics only; invalidation in Phase 3).
 
+**Learning verification (mentor-led review):**
+- Architecture walkthrough: all Phase 2 files, responsibilities, and `GET /api/products/:id` request flow documented
+- Concept Q&A completed; key corrections recorded:
+  - `404` responses throw before `SET` — no `X-Cache` header, nothing written to Redis
+  - TTL **limits** staleness; it does not **prevent** it (invalidation is Phase 3)
+  - `products:all` and `product:{id}` are independent keys and can disagree until expiry
+- Hands-on trace completed (see journal for full command log)
+
+**Hands-on trace results (verified live):**
+
+| Step | Command / action | Observed |
+|---|---|---|
+| Cold start | `FLUSHDB` then `GET /api/products` | `X-Cache: miss` |
+| Warm list | Repeat `GET /api/products` | `X-Cache: hit` |
+| Redis inspect | `KEYS "*"` | `products:all` present |
+| TTL check | `TTL products:all` | ~283s (counting down from 300) |
+| Detail cold | `GET /api/products/{id}` (list already cached) | `X-Cache: miss` — separate key |
+| Detail warm | Repeat detail request | `X-Cache: hit` |
+| Invalid UUID | `GET /api/products/not-a-uuid` | `400`, no `X-Cache` (middleware) |
+| Not found | `GET /api/products/{valid-missing-uuid}` | `404`, no `X-Cache`, no new Redis key |
+| Bypass | `docker stop redis` + detail request | `X-Cache: bypass`, `200` from Postgres |
+
 **Verification:**
 - First request: `X-Cache: miss`; second request: `X-Cache: hit`
 - `docker exec redis-patterns-redis redis-cli KEYS "*"` shows populated keys
-- `npx autocannon -c 50 -d 10 http://localhost:3001/api/products` (compare with Redis stopped vs warm)
+- `docker exec redis-patterns-redis redis-cli TTL "products:all"` confirms countdown from 300
+- On Windows use `curl.exe` (not PowerShell `curl` alias) for reliable header inspection
+- `npx autocannon -c 50 -d 10 http://localhost:3001/api/products` (compare with Redis stopped vs warm) — optional, not yet run in review session
+
+**Learning status:** Implementation complete. Conceptual understanding and hands-on trace complete. Autocannon benchmark optional before Phase 3.
 
 ---
 
-*Last updated: Phase 2 - Cache-Aside Pattern*
+*Last updated: Phase 2 - Cache-Aside Pattern (learning verification + hands-on trace)*
